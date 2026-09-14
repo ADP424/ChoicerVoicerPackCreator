@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Models (fetched via `npm run fetch-models`)
+public/models/*.onnx
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
