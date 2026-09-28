@@ -27,10 +27,11 @@ export function SpeakersPanel({ speakers, lines, dispatch, onPlaySample, frames 
     <fieldset className="panel">
       <legend>Speakers</legend>
       <table className="speakers">
-        <thead><tr><th /><th>Image</th><th>Cluster</th><th>Character name</th><th>Lines</th><th>Portrait override</th><th /></tr></thead>
+        <thead><tr><th /><th>Image</th><th>Cluster</th><th>Character name</th><th>Lines</th><th>Portrait override</th><th /><th /></tr></thead>
         <tbody>
           {speakers.map((s) => {
             const first = firstLine.get(s.id);
+            const lineCount = lines.filter((l) => l.speakerId === s.id).length;
             return (
               <tr key={s.id} className={counts.get(s.id) ? '' : 'excluded'}>
                 <td><input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)} /></td>
@@ -46,6 +47,15 @@ export function SpeakersPanel({ speakers, lines, dispatch, onPlaySample, frames 
                   {s.portraitFile && <button className="small" onClick={() => dispatch({ type: 'setPortrait', id: s.id, file: null })}>Clear</button>}
                 </td>
                 <td><button disabled={!first} onClick={() => onPlaySample(s.id)} title="Play a sample line">▶</button></td>
+                <td>
+                  <button
+                    className="icon danger" title="Delete this speaker (and its lines, if any)"
+                    onClick={() => {
+                      if (lineCount > 0 && !confirm(`"${s.name}" has ${lineCount} line(s). Delete the speaker and all of its lines?`)) return;
+                      dispatch({ type: 'removeSpeaker', id: s.id });
+                    }}
+                  >🗑</button>
+                </td>
               </tr>
             );
           })}

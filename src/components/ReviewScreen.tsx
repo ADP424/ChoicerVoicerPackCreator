@@ -12,6 +12,7 @@ import { MetadataForm } from './MetadataForm';
 import { SpeakersPanel } from './SpeakersPanel';
 import { LinesTable } from './LinesTable';
 import { WaveformEditor } from './WaveformEditor';
+import { TrackOverview } from './TrackOverview';
 import { TextField } from './TextField';
 import { Thumb } from './Thumb';
 
@@ -27,7 +28,17 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
   const reviewInput = useRef<HTMLInputElement>(null);
   const packZipInput = useRef<HTMLInputElement>(null);
   const packDirInput = useRef<HTMLInputElement>(null);
-  const player = usePlayer(draft.mix, draft.vocals);
+  const sources = useMemo(() => new Map([
+    ['main', { mix: draft.mix, vocals: draft.vocals }],
+    ...draft.extraTracks.map((t) => [t.trackId, { mix: t.rawMix, vocals: t.vocals }] as const),
+  ]), [draft.mix, draft.vocals, draft.extraTracks]);
+  const backingForPlayback = draft.backgroundBacking ?? draft.backing;
+  const player = usePlayer(sources, backingForPlayback);
+  const tracks = useMemo(() => [
+    { id: 'main', label: 'Main' },
+    ...draft.extraTracks.map((t) => ({ id: t.trackId, label: t.label })),
+  ], [draft.extraTracks]);
+  const [activeTrackId, setActiveTrackId] = useState('main');
 
   // Screenshot source for default images. Created/disposed strictly inside the
   // effect so StrictMode's mount→cleanup→mount cycle (and any real remount)
@@ -44,16 +55,32 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
   const frames = framesOk === false ? null : grabber; // null only when known-broken (banner case)
 
   const duration = draft.mix.channels[0].length / draft.mix.sampleRate;
-  const waveAudio = useMemo(() => mixdown(draft.vocals.channels), [draft.vocals]);
+  const durationByTrack = useMemo(() => new Map([
+    ['main', duration],
+    ...draft.extraTracks.map((t) => [t.trackId, t.rawMix.channels[0].length / t.rawMix.sampleRate] as const),
+  ]), [duration, draft.extraTracks]);
+  const waveAudioByTrack = useMemo(() => new Map([
+    ['main', mixdown(draft.vocals.channels)],
+    ...draft.extraTracks.map((t) => [t.trackId, mixdown(t.vocals.channels)] as const),
+  ]), [draft.vocals, draft.extraTracks]);
+  const sampleRateByTrack = useMemo(() => new Map([
+    ['main', draft.vocals.sampleRate],
+    ...draft.extraTracks.map((t) => [t.trackId, t.vocals.sampleRate] as const),
+  ]), [draft.vocals, draft.extraTracks]);
   const sorted = useMemo(() => [...state.lines].sort((a, b) => a.start - b.start), [state.lines]);
+  const sortedActive = useMemo(() => sorted.filter((l) => l.trackId === activeTrackId), [sorted, activeTrackId]);
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return q ? sorted.filter((l) => l.caption.toLowerCase().includes(q)) : sorted;
-  }, [sorted, filter]);
+    return q ? sortedActive.filter((l) => l.caption.toLowerCase().includes(q)) : sortedActive;
+  }, [sortedActive, filter]);
   const selected = state.lines.find((l) => l.id === selectedId) ?? null;
   const selectedSpeaker = selected ? state.speakers.find((s) => s.id === selected.speakerId) : null;
 
-  useEffect(() => { if (!selectedId && sorted.length) setSelectedId(sorted[0].id); }, [sorted, selectedId]);
+  // Re-pick a default selection whenever the active tab changes and the current selection isn't on it.
+  useEffect(() => {
+    if (selected?.trackId === activeTrackId) return;
+    setSelectedId(sortedActive.length ? sortedActive[0].id : null);
+  }, [activeTrackId, sortedActive, selected]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,7 +90,7 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
       if (!selected) return;
       const i = visible.findIndex((l) => l.id === selected.id);
       switch (e.key) {
-        case ' ': e.preventDefault(); player.playing === selected.id ? player.stop() : player.play(selected.start, selected.end, 'mix', selected.id); break;
+        case ' ': e.preventDefault(); player.playing === selected.id ? player.stop() : player.playAll(selected.start, selected.end, selected.id); break;
         case 'ArrowDown': e.preventDefault(); if (i < visible.length - 1) setSelectedId(visible[i + 1].id); break;
         case 'ArrowUp': e.preventDefault(); if (i > 0) setSelectedId(visible[i - 1].id); break;
         case 'Delete': case 'Backspace': dispatch({ type: 'updateLine', id: selected.id, patch: { included: !selected.included } }); break;
@@ -73,22 +100,24 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, visible, player, dispatch]);
 
-  /** Insert an empty line after `afterId` (or after the last line when null), starting where that line ends. */
+  /** Insert an empty line, on the active tab's track, after `afterId` (or after the tab's last line when null). */
   function addLineAfter(afterId: string | null) {
-    const ref = afterId ? state.lines.find((l) => l.id === afterId) : sorted.at(-1);
-    const start = ref ? Math.min(ref.end, Math.max(0, duration - 0.1)) : 0;
-    const next = ref ? sorted[sorted.findIndex((l) => l.id === ref.id) + 1] : undefined;
-    let end = Math.min(duration, start + 1);
+    const ref = afterId ? state.lines.find((l) => l.id === afterId) : sortedActive.at(-1);
+    const trackId = activeTrackId;
+    const trackDuration = durationByTrack.get(trackId) ?? duration;
+    const start = ref ? Math.min(ref.end, Math.max(0, trackDuration - 0.1)) : 0;
+    const next = ref ? sortedActive[sortedActive.findIndex((l) => l.id === ref.id) + 1] : undefined;
+    let end = Math.min(trackDuration, start + 1);
     if (next && next.start > start + 0.1) end = Math.min(end, next.start);
     const id = crypto.randomUUID();
-    dispatch({ type: 'addLine', id, start, end, afterId: ref?.id ?? null });
+    dispatch({ type: 'addLine', id, start, end, afterId: ref?.id ?? null, trackId });
     setSelectedId(id);
   }
 
   function deleteLine(id: string) {
     if (selectedId === id) {
-      const i = sorted.findIndex((l) => l.id === id);
-      setSelectedId(sorted[i + 1]?.id ?? sorted[i - 1]?.id ?? null);
+      const i = sortedActive.findIndex((l) => l.id === id);
+      setSelectedId(sortedActive[i + 1]?.id ?? sortedActive[i - 1]?.id ?? null);
     }
     dispatch({ type: 'removeLine', id });
   }
@@ -168,7 +197,7 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
 
   const playSample = (speakerId: string) => {
     const l = sorted.find((x) => x.speakerId === speakerId && x.included);
-    if (l) player.play(l.start, l.end, 'mix', l.id);
+    if (l) player.playAll(l.start, l.end, l.id);
   };
 
   return (
@@ -198,9 +227,10 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
         <div className="banner">Speaker grouping was unavailable — all lines start in one “Speaker 1” group. Create speakers below and reassign lines with the Speaker dropdown.</div>
       )}
       {draft.backingQuality === 'phase-cancel-fallback' && <div className="banner">Backing track quality: low (MDX-Net unavailable; used phase-cancellation fallback).</div>}
-      {draft.backingQuality === 'none' && <div className="banner">No backing track could be produced; the pack will be exported without one.</div>}
+      {!draft.backing && !draft.backgroundBacking && <div className="banner">No backing track could be produced; the pack will be exported without one.</div>}
       {!draft.videoStripped && <div className="banner">Could not strip audio from the video (ffmpeg.wasm failed); the original file will be exported as dub_video.</div>}
       {framesOk === false && <div className="banner">This browser cannot decode the video frames, so default screenshots are unavailable. Lines without an assigned image will be exported without one.</div>}
+      {draft.extraTracks.length > 0 && <div className="banner">Additional tracks run in parallel on the same timeline as the main video — "▶ Mix" plays them all together at matching timestamps, so verify they're synced before exporting.</div>}
 
       {importWarnings.length > 0 && (
         <div className="banner">
@@ -214,7 +244,32 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
       <SpeakersPanel speakers={state.speakers} lines={state.lines} dispatch={dispatch} onPlaySample={playSample} frames={frames} />
 
       <fieldset className="panel lines-panel">
-        <legend>Lines ({state.lines.filter((l) => l.included).length} included / {state.lines.length})</legend>
+        <legend>Lines ({sortedActive.filter((l) => l.included).length} included / {sortedActive.length} on this track)</legend>
+        {tracks.length > 1 && (
+          <div className="row tabs" role="tablist">
+            {tracks.map((t) => {
+              const count = state.lines.filter((l) => l.trackId === t.id).length;
+              return (
+                <button
+                  key={t.id} role="tab" aria-selected={t.id === activeTrackId}
+                  className={t.id === activeTrackId ? 'active' : ''}
+                  onClick={() => setActiveTrackId(t.id)}
+                >
+                  {t.label} ({count})
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <TrackOverview
+          audio={waveAudioByTrack.get(activeTrackId) ?? waveAudioByTrack.get('main')!}
+          sampleRate={sampleRateByTrack.get(activeTrackId) ?? draft.vocals.sampleRate}
+          duration={durationByTrack.get(activeTrackId) ?? duration}
+          lines={sortedActive}
+          speakers={state.speakers}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
         <div className="row">
           <input placeholder="Filter captions…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 320 }} />
           <span className="spacer" />
@@ -222,8 +277,13 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
             ↶ Undo{state.past.length ? ` (${state.past.length})` : ''}
           </button>
           <button onClick={() => dispatch({ type: 'redo' })} disabled={!state.future.length}>↷ Redo</button>
-          {selected && <button onClick={() => dispatch({ type: 'mergeWithNext', id: selected.id })}>Merge with next</button>}
-          {!state.lines.length && <button onClick={() => addLineAfter(null)}>Add line</button>}
+          {selected && (
+            <button disabled={sortedActive.findIndex((l) => l.id === selected.id) === sortedActive.length - 1}
+              onClick={() => dispatch({ type: 'mergeWithNext', id: selected.id })}>
+              Merge with next
+            </button>
+          )}
+          {!sortedActive.length && <button onClick={() => addLineAfter(null)}>Add line</button>}
         </div>
         <div className="lines-layout">
           <div className="lines-scroll">
@@ -235,8 +295,12 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
           {selected && (
             <div className="detail">
               <WaveformEditor
-                audio={waveAudio} sampleRate={draft.vocals.sampleRate} duration={duration}
-                line={selected} others={sorted.filter((l) => l.id !== selected.id)} speakers={state.speakers}
+                audio={waveAudioByTrack.get(selected.trackId) ?? waveAudioByTrack.get('main')!}
+                sampleRate={sampleRateByTrack.get(selected.trackId) ?? draft.vocals.sampleRate}
+                duration={durationByTrack.get(selected.trackId) ?? duration}
+                line={selected}
+                others={sorted.filter((l) => l.id !== selected.id && l.trackId === selected.trackId)}
+                speakers={state.speakers}
                 onCommit={(patch) => dispatch({ type: 'updateLine', id: selected.id, patch })}
                 onSplit={(at) => dispatch({ type: 'splitLine', id: selected.id, at })}
                 player={player}
@@ -246,7 +310,7 @@ export function ReviewScreen({ draft, onRestart }: { draft: Draft; onRestart: ()
                   <TextField value={selected.start.toFixed(3)} onCommit={(v) => { const n = +v; if (Number.isFinite(n) && n >= 0 && n < selected.end) dispatch({ type: 'updateLine', id: selected.id, patch: { start: n } }); }} />
                 </label>
                 <label>End (s)
-                  <TextField value={selected.end.toFixed(3)} onCommit={(v) => { const n = +v; if (Number.isFinite(n) && n > selected.start && n <= duration) dispatch({ type: 'updateLine', id: selected.id, patch: { end: n } }); }} />
+                  <TextField value={selected.end.toFixed(3)} onCommit={(v) => { const n = +v; const maxEnd = durationByTrack.get(selected.trackId) ?? duration; if (Number.isFinite(n) && n > selected.start && n <= maxEnd) dispatch({ type: 'updateLine', id: selected.id, patch: { end: n } }); }} />
                 </label>
                 <label className="span2">Caption
                   <TextField multiline rows={2} value={selected.caption} onCommit={(v) => dispatch({ type: 'updateLine', id: selected.id, patch: { caption: v.trim() } })} />

@@ -17,3 +17,7 @@ yarn-error.log*
 # VS Code
 .vscode/*
 !.vscode/extensions.json
+
+# Claude
+.claude
+CLAUDE.md

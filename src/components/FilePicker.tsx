@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { PipelineOptions, RestoreData } from '../types';
+import type { ExtraTrackInput, PipelineOptions, RestoreData } from '../types';
 import { readReviewFile } from '../lib/reviewFile';
 import { filesFromDirectoryHandle, filesFromFileList, filesFromZip, parsePack } from '../lib/importPack';
+import { ProcessingOptionsFields } from './ProcessingOptionsFields';
 
 const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
 const canPickDirectory = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
@@ -11,25 +12,25 @@ export const DEFAULT_OPTIONS: PipelineOptions = {
   separation: 'mdx-net',
   whisperModel: hasWebGPU ? 'onnx-community/whisper-small' : 'onnx-community/whisper-base',
   language: 'auto',
+  transcribe: true,
   diarize: true,
   clusterThreshold: 0.7,
+  detection: 'speech',
   vadThreshold: 0.5,
+  energyThreshold: 0.15,
   minSilenceMs: 300,
   minSpeechMs: 250,
   maxLineSec: 20,
 };
 
-const WHISPER_MODELS = [
-  ['onnx-community/whisper-tiny', 'tiny (fastest)'],
-  ['onnx-community/whisper-base', 'base'],
-  ['onnx-community/whisper-small', 'small'],
-  ['onnx-community/whisper-large-v3-turbo', 'large-v3-turbo (best, WebGPU only realistically)'],
-];
-const LANGUAGES = [['auto', 'Auto-detect'], ['en', 'English'], ['ja', 'Japanese'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['zh', 'Chinese'], ['ko', 'Korean'], ['ru', 'Russian'], ['pt', 'Portuguese'], ['it', 'Italian']];
+const stripExt = (name: string) => name.replace(/\.[^.]+$/, '');
 
-export function FilePicker({ onStart }: { onStart: (file: File, options: PipelineOptions, restore: RestoreData | null) => void }) {
+export function FilePicker({ onStart }: {
+  onStart: (file: File, options: PipelineOptions, extraTracks: ExtraTrackInput[], restore: RestoreData | null) => void;
+}) {
   const [options, setOptions] = useState(DEFAULT_OPTIONS);
   const [file, setFile] = useState<File | null>(null);
+  const [extraTracks, setExtraTracks] = useState<ExtraTrackInput[]>([]);
   const [restore, setRestore] = useState<{ label: string; data: RestoreData } | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
@@ -42,6 +43,26 @@ export function FilePicker({ onStart }: { onStart: (file: File, options: Pipelin
       else if (lower.endsWith('.zip')) await loadPack(() => filesFromZip(f), f.name);
       else setFile(f);
     }
+  }
+
+  function takeExtraTracks(list: FileList | File[]) {
+    const added: ExtraTrackInput[] = Array.from(list).map((f) => ({
+      id: crypto.randomUUID(), kind: 'dub', file: f, label: stripExt(f.name),
+      options: { ...DEFAULT_OPTIONS },
+    }));
+    setExtraTracks((ts) => [...ts, ...added]);
+  }
+
+  function updateExtraTrack(id: string, patch: Partial<ExtraTrackInput>) {
+    setExtraTracks((ts) => ts.map((t) => (t.id === id ? ({ ...t, ...patch } as ExtraTrackInput) : t)));
+  }
+
+  function removeExtraTrack(id: string) {
+    setExtraTracks((ts) => ts.filter((t) => t.id !== id));
+  }
+
+  function applyMainSettingsToAllTracks() {
+    setExtraTracks((ts) => ts.map((t) => (t.kind === 'dub' ? { ...t, options: { ...options } } : t)));
   }
 
   async function loadReview(f: File) {
@@ -115,53 +136,62 @@ export function FilePicker({ onStart }: { onStart: (file: File, options: Pipelin
 
       <details className="options" open={!restore}>
         <summary>Processing options{restore ? ' (only separation/device are used when restoring)' : ''}</summary>
-        <div className="grid">
-          <label>Compute device
-            <select value={options.device} onChange={(e) => set('device', e.target.value as any)}>
-              <option value="webgpu" disabled={!hasWebGPU}>WebGPU {hasWebGPU ? '' : '(unavailable)'}</option>
-              <option value="wasm">CPU (WebAssembly)</option>
-            </select>
-          </label>
-          <label>Vocal separation
-            <select value={options.separation} onChange={(e) => set('separation', e.target.value as any)}>
-              <option value="mdx-net">MDX-Net (best quality, slow)</option>
-              <option value="phase-cancel">Phase cancellation (fast, low quality)</option>
-              <option value="none">None (no backing track)</option>
-            </select>
-          </label>
-          <label>Whisper model
-            <select value={options.whisperModel} disabled={!!restore} onChange={(e) => set('whisperModel', e.target.value)}>
-              {WHISPER_MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-          </label>
-          <label>Language
-            <select value={options.language} disabled={!!restore} onChange={(e) => set('language', e.target.value)}>
-              {LANGUAGES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={options.diarize} disabled={!!restore} onChange={(e) => set('diarize', e.target.checked)} /> Auto-group speakers
-          </label>
-          <label>Speaker similarity threshold ({options.clusterThreshold.toFixed(2)})
-            <input type="range" min={0.4} max={0.95} step={0.01} value={options.clusterThreshold} disabled={!!restore || !options.diarize} onChange={(e) => set('clusterThreshold', +e.target.value)} />
-            <span className="muted">Lower → more speakers</span>
-          </label>
-          <label>Min silence between lines (ms)
-            <input type="number" min={50} step={50} value={options.minSilenceMs} disabled={!!restore} onChange={(e) => set('minSilenceMs', +e.target.value)} />
-          </label>
-          <label>Min line length (ms)
-            <input type="number" min={50} step={50} value={options.minSpeechMs} disabled={!!restore} onChange={(e) => set('minSpeechMs', +e.target.value)} />
-          </label>
-          <label>Max line length (s)
-            <input type="number" min={3} step={1} value={options.maxLineSec} disabled={!!restore} onChange={(e) => set('maxLineSec', +e.target.value)} />
-          </label>
-          <label>Speech sensitivity ({options.vadThreshold.toFixed(2)})
-            <input type="range" min={0.2} max={0.9} step={0.05} value={options.vadThreshold} disabled={!!restore} onChange={(e) => set('vadThreshold', +e.target.value)} />
-          </label>
-        </div>
+        <ProcessingOptionsFields options={options} onChange={setOptions} disabled={!!restore} />
       </details>
 
-      <button className="primary" disabled={!file} onClick={() => file && onStart(file, options, restore?.data ?? null)}>
+      <fieldset className="panel">
+        <legend>Additional audio tracks (optional)</legend>
+        {restore ? (
+          <p className="muted small">Additional tracks are not available when restoring a saved review or pack.</p>
+        ) : (
+          <>
+            <p className="muted small">
+              Each track can be added as a <strong>dub</strong> track (its own alternate lines — set "Vocal
+              separation" to "None" in its Track options to skip separation and use the raw track) or a{' '}
+              <strong>background</strong> track (music/ambience only — mixed straight into the exported backing
+              track, no analysis).
+            </p>
+            <label className="row" style={{ gap: 4 }}>
+              <input type="file" accept="audio/*,video/*" multiple onChange={(e) => { if (e.target.files?.length) takeExtraTracks(e.target.files); e.currentTarget.value = ''; }} />
+            </label>
+            {extraTracks.some((t) => t.kind === 'dub') && (
+              <button className="small" onClick={applyMainSettingsToAllTracks} title="Copy the main track's processing options to every dub track">
+                Apply main track settings to all dub tracks
+              </button>
+            )}
+            {extraTracks.map((t) => (
+              <div key={t.id} className="track-row">
+                <div className="row" style={{ gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <input
+                    value={t.label} onChange={(e) => updateExtraTrack(t.id, { label: e.target.value })}
+                    style={{ maxWidth: 180 }}
+                  />
+                  <select
+                    value={t.kind}
+                    onChange={(e) => {
+                      const kind = e.target.value as 'dub' | 'background';
+                      if (kind === 'dub') updateExtraTrack(t.id, { kind, options: { ...DEFAULT_OPTIONS } } as Partial<ExtraTrackInput>);
+                      else updateExtraTrack(t.id, { kind } as Partial<ExtraTrackInput>);
+                    }}
+                  >
+                    <option value="dub">Dub track</option>
+                    <option value="background">Background track</option>
+                  </select>
+                  <button className="icon danger" title="Remove this track" onClick={() => removeExtraTrack(t.id)}>🗑</button>
+                </div>
+                {t.kind === 'dub' && (
+                  <details>
+                    <summary className="small">Track options</summary>
+                    <ProcessingOptionsFields options={t.options} onChange={(o) => updateExtraTrack(t.id, { options: o })} />
+                  </details>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </fieldset>
+
+      <button className="primary" disabled={!file} onClick={() => file && onStart(file, options, extraTracks, restore?.data ?? null)}>
         {restore ? 'Restore session' : 'Build voice pack'}
       </button>
     </div>

@@ -38,7 +38,7 @@ export function LinesTable({ lines, speakers, selectedId, onSelect, dispatch, pl
             </td>
             <td><input type="checkbox" checked={l.included} onChange={(e) => dispatch({ type: 'updateLine', id: l.id, patch: { included: e.target.checked } })} /></td>
             <td className="actions" onClick={(e) => e.stopPropagation()}>
-              <button className="icon" title="Play" onClick={() => (player.playing === l.id ? player.stop() : player.play(l.start, l.end, 'mix', l.id))}>
+              <button className="icon" title="Play (all tracks)" onClick={() => (player.playing === l.id ? player.stop() : player.playAll(l.start, l.end, l.id))}>
                 {player.playing === l.id ? '■' : '▶'}
               </button>
               <button className="icon" title="Add a new line after this one" onClick={() => onAddAfter(l.id)}>＋</button>

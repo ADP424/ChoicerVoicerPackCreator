@@ -10,13 +10,14 @@ export type EditorAction =
   | { type: 'updateLine'; id: string; patch: Partial<PackLine> }
   | { type: 'splitLine'; id: string; at: number }
   | { type: 'mergeWithNext'; id: string }
-  | { type: 'addLine'; id: string; start: number; end: number; afterId: string | null }
+  | { type: 'addLine'; id: string; start: number; end: number; afterId: string | null; trackId: string }
   | { type: 'removeLine'; id: string }
   | { type: 'addSpeaker' }
   | { type: 'newSpeakerForLine'; id: string }
   | { type: 'renameSpeaker'; id: string; name: string }
   | { type: 'setPortrait'; id: string; file: File | null }
   | { type: 'mergeSpeakers'; sourceIds: string[]; targetId: string }
+  | { type: 'removeSpeaker'; id: string }
   | { type: 'setMetadata'; patch: Partial<PackMetadata> }
   | { type: 'loadReview'; lines: PackLine[]; speakers: Speaker[]; metadata: PackMetadata }
   | { type: 'undo' } | { type: 'redo' };
@@ -67,10 +68,12 @@ function reducer(state: EditorState, a: EditorAction): EditorState {
       return commit(state, { lines: state.lines.flatMap((l) => (l.id === a.id ? [x, y] : [l])) });
     }
     case 'mergeWithNext': {
-      const sorted = [...state.lines].filter((l) => l.included).sort((x, y) => x.start - y.start);
-      const i = sorted.findIndex((l) => l.id === a.id);
-      if (i < 0 || i === sorted.length - 1) return state;
-      const cur = sorted[i], next = sorted[i + 1];
+      const cur = state.lines.find((l) => l.id === a.id);
+      if (!cur) return state;
+      const sameTrack = state.lines.filter((l) => l.trackId === cur.trackId).sort((x, y) => x.start - y.start);
+      const i = sameTrack.findIndex((l) => l.id === a.id);
+      if (i < 0 || i === sameTrack.length - 1) return state;
+      const next = sameTrack[i + 1];
       const merged: PackLine = {
         ...cur, end: Math.max(cur.end, next.end),
         caption: [cur.caption, next.caption].filter(Boolean).join(' '),
@@ -85,6 +88,7 @@ function reducer(state: EditorState, a: EditorAction): EditorState {
       const line: PackLine = {
         id: a.id, start: a.start, end: a.end, caption: '',
         speakerId: after?.speakerId ?? speakers[0].id, words: [], imageFile: null, included: true,
+        trackId: a.trackId,
       };
       const lines = [...state.lines];
       lines.splice(after ? lines.indexOf(after) + 1 : lines.length, 0, line);
@@ -114,6 +118,11 @@ function reducer(state: EditorState, a: EditorAction): EditorState {
         lines: state.lines.map((l) => (gone.has(l.speakerId) ? { ...l, speakerId: a.targetId } : l)),
       });
     }
+    case 'removeSpeaker':
+      return commit(state, {
+        speakers: state.speakers.filter((s) => s.id !== a.id),
+        lines: state.lines.filter((l) => l.speakerId !== a.id),
+      });
     case 'setMetadata':
       return { ...state, metadata: { ...state.metadata, ...a.patch } };
     case 'loadReview':
@@ -133,6 +142,6 @@ function reducer(state: EditorState, a: EditorAction): EditorState {
 
 export function useDraft(draft: Draft) {
   return useReducer(reducer, draft, (d): EditorState => ({
-    lines: d.lines, speakers: d.speakers, metadata: d.metadata, past: [], future: [],
+    lines: d.allLines, speakers: d.allSpeakers, metadata: d.metadata, past: [], future: [],
   }));
 }

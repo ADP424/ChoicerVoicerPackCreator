@@ -92,9 +92,9 @@ export function WaveformEditor({ audio, sampleRate, duration, line, others, spea
     <div className="waveform">
       <canvas ref={canvas} width={1000} height={H} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
       <div className="row">
-        <button onClick={() => player.play(local.start, local.end, 'mix', line.id)}>▶ Mix</button>
-        <button onClick={() => player.play(local.start, local.end, 'vocals', line.id)}>▶ Vocals only</button>
-        <button onClick={() => player.play(Math.max(0, local.start - 1), Math.min(duration, local.end + 1), 'mix', line.id)}>▶ With context</button>
+        <button onClick={() => player.playAll(local.start, local.end, line.id)} title="Play every track's own mix plus the backing track, all at once">▶ Mix (all tracks)</button>
+        <button onClick={() => player.play(local.start, local.end, line.trackId, 'vocals', line.id)}>▶ Vocals only</button>
+        <button onClick={() => player.play(Math.max(0, local.start - 1), Math.min(duration, local.end + 1), line.trackId, 'mix', line.id)}>▶ With context</button>
         <button onClick={player.stop}>■ Stop</button>
       </div>
       <div className="row">

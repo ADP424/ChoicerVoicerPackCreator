@@ -74,7 +74,7 @@ export function applyReview(
     lines.push({
       id, start, end, caption: l.caption, speakerId: l.speakerId,
       words: Array.isArray(l.words) ? l.words.filter((w) => isStr(w?.text) && isNum(w?.start) && isNum(w?.end)) : [],
-      imageFile: null, included: l.included !== false,
+      imageFile: null, included: l.included !== false, trackId: 'main',
     });
   }
   if (clamped) warnings.push(`${clamped} line(s) extended past the end of the audio and were clamped.`);

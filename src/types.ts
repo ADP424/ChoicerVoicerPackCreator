@@ -9,6 +9,7 @@ export interface PackLine {
   words: Word[];
   imageFile: File | null;
   included: boolean;
+  trackId: string;
 }
 
 export interface Speaker { id: string; name: string; portraitFile: File | null }
@@ -25,15 +26,46 @@ export interface PipelineOptions {
   separation: 'mdx-net' | 'phase-cancel' | 'none';
   whisperModel: string;
   language: string; // 'auto' or ISO code
+  transcribe: boolean;
   diarize: boolean;
   clusterThreshold: number;
+  detection: 'speech' | 'energy';
   vadThreshold: number;
+  energyThreshold: number;
   minSilenceMs: number;
   minSpeechMs: number;
   maxLineSec: number;
 }
 
 export interface PipelineResult {
+  vocals: PcmAudio;
+  backing: PcmAudio | null;
+  backingQuality: BackingQuality;
+  diarizationAvailable: boolean;
+  lines: PackLine[];
+  speakers: Speaker[];
+}
+
+/** One extra uploaded track, before decoding. */
+export interface DubTrackInput {
+  id: string;
+  kind: 'dub';
+  file: File;
+  label: string;
+  options: PipelineOptions;
+}
+export interface BackgroundTrackInput {
+  id: string;
+  kind: 'background';
+  file: File;
+  label: string;
+}
+export type ExtraTrackInput = DubTrackInput | BackgroundTrackInput;
+
+/** Result of running one dub track (main or extra) through the worker. */
+export interface TrackResult {
+  trackId: string;
+  label: string;
   vocals: PcmAudio;
   backing: PcmAudio | null;
   backingQuality: BackingQuality;
@@ -51,12 +83,28 @@ export interface Draft extends PipelineResult {
   metadata: PackMetadata;
   options: PipelineOptions;
   importWarnings: string[];
+
+  /** Dub tracks beyond the main video-derived one, each with its own raw decoded audio. */
+  extraTracks: Array<TrackResult & { rawMix: PcmAudio }>;
+  /** Main's own separated backing plus every uploaded background track, mixed; null if there's nothing to export. */
+  backgroundBacking: PcmAudio | null;
+  /** main.lines ++ extraTracks[].lines, sorted by start. */
+  allLines: PackLine[];
+  /** main.speakers ++ extraTracks[].speakers, de-duplicated by id. */
+  allSpeakers: Speaker[];
 }
 
-export type WorkerIn = { type: 'run'; mix: PcmAudio; options: PipelineOptions; skipAnalysis: boolean };
+export type WorkerIn = {
+  type: 'run';
+  trackId: string;
+  label: string;
+  mix: PcmAudio;
+  options: PipelineOptions;
+  skipAnalysis: boolean;
+};
 export type WorkerOut =
   | { type: 'progress'; stage: string; message: string; fraction?: number }
-  | { type: 'result'; result: PipelineResult }
+  | { type: 'result'; result: TrackResult }
   | { type: 'error'; message: string };
 
 export type Progress = (stage: string, message: string, fraction?: number) => void;

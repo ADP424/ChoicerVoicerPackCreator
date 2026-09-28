@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import type { Draft, PackLine, PackMetadata, Speaker } from '../types';
+import type { Draft, PackLine, PackMetadata, PcmAudio, Speaker } from '../types';
 import { slicePcm } from './audio';
 import { formatIniString, formatIniStringList, sanitizeFilenamePart } from './ini';
 import { encodeMp3 } from './mp3';
@@ -31,7 +31,8 @@ export async function buildPackFiles(
   const warnings: string[] = [];
 
   files.set(`dub_video.${draft.videoExt}`, draft.videoBlob);
-  if (draft.backing) { onProgress('Encoding backing track…'); files.set('_backing_track.mp3', encodeMp3(draft.backing)); }
+  const backingToExport = draft.backgroundBacking ?? draft.backing;
+  if (backingToExport) { onProgress('Encoding backing track…'); files.set('_backing_track.mp3', encodeMp3(backingToExport)); }
 
   onProgress('Preparing icon…');
   const icon = metadata.iconFile
@@ -45,6 +46,11 @@ export async function buildPackFiles(
   if (metadata.authors.length) info.push(`authors=${formatIniStringList(metadata.authors)}`);
   if (metadata.readme) info.push(`readme=${formatIniString(metadata.readme)}`);
   files.set('_pack_info.ini', new Blob([info.join('\n') + '\n'], { type: 'text/plain' }));
+
+  const rawByTrackId = new Map<string, PcmAudio>([
+    ['main', draft.mix],
+    ...draft.extraTracks.map((t) => [t.trackId, t.rawMix] as const),
+  ]);
 
   const included = lines.filter((l) => l.included).sort((a, b) => a.start - b.start);
   for (let i = 0; i < included.length; i++) {
@@ -61,7 +67,8 @@ export async function buildPackFiles(
     if (image) files.set(`${stem}.png`, image);
     else warnings.push(`Line ${i} ("${stem}"): no image could be captured; exported without one.`);
 
-    files.set(`${stem}.mp3`, encodeMp3(slicePcm(draft.mix, line.start, line.end)));
+    const raw = rawByTrackId.get(line.trackId) ?? draft.mix;
+    files.set(`${stem}.mp3`, encodeMp3(slicePcm(raw, line.start, line.end)));
 
     const txt = ['[data]', '', `caption=${formatIniString(line.caption)}`];
     if (image) txt.push(`image="${stem}.png"`);

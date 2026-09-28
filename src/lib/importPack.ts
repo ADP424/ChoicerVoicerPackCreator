@@ -138,7 +138,7 @@ export async function parsePack(files: Map<string, Blob>, label: string): Promis
       lines.push({
         id: crypto.randomUUID(), start, end,
         caption: unquote(kv.get('caption') ?? ''),
-        speakerId: speakerName, words: [], imageFile, included: true,
+        speakerId: speakerName, words: [], imageFile, included: true, trackId: 'main',
       });
     }
   } finally {

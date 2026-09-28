@@ -1,3 +1,5 @@
+import type { PcmAudio } from '../types';
+
 export function mixdown(channels: Float32Array[]): Float32Array {
   if (channels.length === 1) return channels[0];
   const n = channels[0].length;
@@ -5,6 +7,29 @@ export function mixdown(channels: Float32Array[]): Float32Array {
   const g = 1 / channels.length;
   for (const ch of channels) for (let i = 0; i < n; i++) out[i] += ch[i] * g;
   return out;
+}
+
+/**
+ * Mixes several independent PCM sources into one, resampling each to `targetRate`
+ * and zero-padding to the longest source's length (never truncating — a background
+ * track may outlast the dialogue it's paired with).
+ */
+export function mixTracks(tracks: PcmAudio[], targetRate: number): PcmAudio {
+  const resampled = tracks.map((t) => t.channels.map((ch) => resample(ch, t.sampleRate, targetRate)));
+  const channelCount = Math.max(...resampled.map((chs) => chs.length));
+  const length = Math.max(...resampled.map((chs) => chs[0]?.length ?? 0));
+  const headroom = 1 / Math.max(1, tracks.length * 0.7);
+  const out: Float32Array[] = Array.from({ length: channelCount }, () => new Float32Array(length));
+  for (const chs of resampled) {
+    for (let c = 0; c < channelCount; c++) {
+      const src = chs[c] ?? chs[0];
+      if (!src) continue;
+      const dst = out[c];
+      for (let i = 0; i < src.length; i++) dst[i] += src[i] * headroom;
+    }
+  }
+  for (const ch of out) for (let i = 0; i < ch.length; i++) ch[i] = Math.max(-1, Math.min(1, ch[i]));
+  return { sampleRate: targetRate, channels: out };
 }
 
 /** torch.hann_window(n) default (periodic=True). */
